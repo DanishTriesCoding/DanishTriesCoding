@@ -1,0 +1,114 @@
+# AgentEvolver GRPO training config — adapted for 2× A100 80GB PCIe
+# Base model: Qwen2.5-7B-Instruct (or available checkpoint)
+# Paper used 8 GPUs; we use 2 with CPU offload + reduced batch
+#
+# Paper methodology:
+#   1. Train Qwen2.5-7B/14B on the environment for 40 epochs with GRPO
+#   2. Evaluate the evolved model on the benchmark (avg@8, best@8)
+# Our adaptation:
+#   1. Train on DROP/SNIPS/SkillsBench original English tasks
+#   2. Evaluate the evolved model on original + multilingual variants
+#   3. Compare: vanilla baseline vs AgentEvolver-evolved model
+
+defaults:
+  - ppo_trainer
+  - agentevolver
+  - _self_
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+
+data:
+  train_batch_size: 2            # REDUCED from 8 to fit in 24GB VRAM
+  max_prompt_length: 2048
+  max_response_length: 1024
+  filter_overlong_prompts: true
+  truncation: "error"
+  return_raw_chat: true
+  train_files: null
+  val_files: null
+  val_batch_size: 32
+  val_type: "val"
+
+actor_rollout_ref:
+  hybrid_engine: true
+  model:
+    path: Qwen/Qwen2.5-7B-Instruct   # swap to local path if downloaded
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+    attn_implementation: sdpa
+    load_in_4bit: true
+    use_peft: true
+    peft_config:
+      r: 32
+      lora_alpha: 64
+      lora_dropout: 0.05
+      target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  rollout:
+    use_qwen3: false
+    enable_request_id: false
+    prompt_length: 2048
+    response_length: 512
+    max_model_len: 3072
+    temperature: 0.9
+    log_prob_micro_batch_size_per_gpu: 1
+    tensor_model_parallel_size: 1
+    name: vllm
+    mode: sync
+    gpu_memory_utilization: 0.45    # Leave room for FSDP training
+    n: 4                            # 8 in paper; 4 rollouts per prompt
+    log_prob_max_token_len_per_gpu: 3072
+    val_kwargs:
+      n: 4
+  actor:
+    optim:
+      lr: 1e-6
+    ppo_micro_batch_size_per_gpu: 1
+    ppo_mini_batch_size: 2
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0
+    off_cliprange_high: 0.6
+    ppo_max_token_len_per_gpu: 3072
+    # FSDP offload removed here
+  ref:
+    log_prob_micro_batch_size_per_gpu: 1
+    log_prob_max_token_len_per_gpu: 3072
+    # FSDP offload removed here
+
+attribution_driven_credit_assignment:
+  enable: false    # Requires external LLM judge API; disable for basic GRPO
+
+exp_manager:
+  # Basic mode: use original tasks only (no self-questioning)
+  train_rollout_mode: "woexp"
+  val_rollout_mode: "woexp"
+  init_exp_before_training: false
+
+trainer:
+  n_gpus_per_node: 1            # 8 in paper; 1 on this machine (GPU 0 has 25GB free, GPU 1 occupied by Gemma)
+                                 # Set N_GPUS=2 and CUDA_VISIBLE_DEVICES=0,1 if GPU 1 becomes free
+  nnodes: 1
+  critic_warmup: 0
+  logger: "['console']"
+  project_name: "arr_multilingual_agentevolver"
+  experiment_name: "drop_grpo_qwen25-7b"
+  save_freq: 50
+  test_freq: 10
+  total_epochs: 20              # 40 in paper; 20 for faster iteration
+  val_before_train: true
+  validation_data_dir: "experiments/grpo/validation_log"
+  rollout_data_dir: "experiments/grpo/rollout_log"
+
+task_manager:
+  env_profile: "/home/csalt/Desktop/AgentEvolver/cookbook/env_profiles/appworld.json"
+  n: 0
+  mixture:
+    synthetic_data_ratio: 0.0
+    use_original_tasks: true    # Use our DROP/SNIPS/SkillsBench task files
+
+env_service:
+  env_url: "http://localhost:8080"
+  env_type: "drop"             # Start with DROP; run separately for snips/skillsbench
