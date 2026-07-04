@@ -486,7 +486,7 @@ class AgentEvolverRayPPOTrainer(RayPPOTrainer):
         self.reward_fn = parse_reward_from_dataproto
         self.val_reward_fn = parse_reward_from_dataproto
 
-        self.env_manager = ParallelEnvManager(config=self.config, async_rollout_manager=self.async_rollout_manager, max_parallel=self.config.actor_rollout_ref.rollout.max_env_worker)
+        self.env_manager = ParallelEnvManager(config=self.config, async_rollout_manager=getattr(self, 'async_rollout_manager', None), max_parallel=self.config.actor_rollout_ref.rollout.max_env_worker)
         self.thread_pool = ThreadPoolExecutor(max_workers=self.config.thread_pool.max_workers)
         self.exp_manager = ExperienceManager(config=self.config)
 

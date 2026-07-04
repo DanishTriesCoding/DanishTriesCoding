@@ -629,8 +629,13 @@ class HETActorRolloutRefWorker(Worker):
 
         if self._is_rollout:
             print(f"[MEM CHECK] Before rollout build: {torch.cuda.memory_allocated()/1e9:.2f} GB allocated, {torch.cuda.memory_reserved()/1e9:.2f} GB reserved")
+            import gc
+            import os
+            gc.collect()
+            torch.cuda.empty_cache()  # ⭐ Force PyTorch to release hoarded VRAM
+            print(f"[MEM CHECK] After cache flush: {torch.cuda.memory_allocated()/1e9:.2f} GB allocated, {torch.cuda.memory_reserved()/1e9:.2f} GB reserved")
+            os.environ["VLLM_USE_V1"] = "0"
             self.rollout, self.rollout_sharding_manager = self._build_rollout(trust_remote_code=self.config.model.get("trust_remote_code", False))
-
         if self._is_ref:
             local_path = copy_to_local(self.config.model.path, use_shm=use_shm)
             self.ref_module_fsdp = self._build_model_optimizer(
